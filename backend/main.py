@@ -1,12 +1,14 @@
 """
 FastAPI backend for Resumate - AI-Powered Resume Converter
 """
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 from contextlib import asynccontextmanager
 import os
 from dotenv import load_dotenv
 from routers import resume, convert, download
+from middleware.rate_limit import limiter, RateLimitExceeded, _rate_limit_exceeded_handler
 
 # Load environment variables
 load_dotenv()
@@ -34,6 +36,10 @@ app = FastAPI(
     version="1.0.0",
     lifespan=lifespan,
 )
+
+# Add rate limiter
+app.state.limiter = limiter
+app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
 
 # Configure CORS
 app.add_middleware(

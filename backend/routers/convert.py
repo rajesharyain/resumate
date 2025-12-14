@@ -1,13 +1,14 @@
 """
 Resume conversion router - AI-powered conversion to different standards
 """
-from fastapi import APIRouter, HTTPException, Body
+from fastapi import APIRouter, HTTPException, Body, Request
 from pydantic import BaseModel, Field
 from typing import Literal
 import os
 import json
-from openai import OpenAI
+from openai import OpenAI, APIError, RateLimitError, APIConnectionError, APITimeoutError
 from prompts.resume_templates import get_prompt_template, RESUME_STANDARDS
+from middleware.rate_limit import limiter, RATE_LIMITS
 
 router = APIRouter(prefix="/api", tags=["convert"])
 
@@ -62,7 +63,8 @@ def parse_json_response(response_text: str) -> dict:
 
 
 @router.post("/convert-resume")
-async def convert_resume(request: ConvertResumeRequest):
+@limiter.limit(RATE_LIMITS["convert"])
+async def convert_resume(http_request: Request, body: ConvertResumeRequest):
     """
     Convert parsed resume text into a structured resume based on selected standard.
     
@@ -76,7 +78,7 @@ async def convert_resume(request: ConvertResumeRequest):
     """
     try:
         # Validate input
-        if not request.resume_text or not request.resume_text.strip():
+        if not body.resume_text or not body.resume_text.strip():
             raise HTTPException(
                 status_code=400,
                 detail="Resume text cannot be empty"
@@ -84,7 +86,7 @@ async def convert_resume(request: ConvertResumeRequest):
         
         # Get prompt template for the selected standard
         try:
-            prompt_template = get_prompt_template(request.standard)
+            prompt_template = get_prompt_template(body.standard)
         except ValueError as e:
             raise HTTPException(
                 status_code=400,
@@ -92,15 +94,15 @@ async def convert_resume(request: ConvertResumeRequest):
             )
         
         # Format prompt with resume text
-        prompt = prompt_template.format(resume_text=request.resume_text.strip())
+        prompt = prompt_template.format(resume_text=body.resume_text.strip())
         
         # Get OpenAI client
         client = get_openai_client()
         
-        # Call OpenAI API
+        # Call OpenAI API with improved error handling
         try:
             response = client.chat.completions.create(
-                model="gpt-4o-mini",  # Using cost-effective model
+                model="gpt-4o-mini",
                 messages=[
                     {
                         "role": "system",
@@ -111,13 +113,46 @@ async def convert_resume(request: ConvertResumeRequest):
                         "content": prompt
                     }
                 ],
-                temperature=0.3,  # Lower temperature for more consistent, structured output
-                response_format={"type": "json_object"}  # Force JSON output
+                temperature=0.3,
+                response_format={"type": "json_object"},
+                timeout=60.0  # 60 second timeout
             )
+        except RateLimitError:
+            raise HTTPException(
+                status_code=429,
+                detail="OpenAI API rate limit exceeded. Please try again later."
+            )
+        except APITimeoutError:
+            raise HTTPException(
+                status_code=504,
+                detail="Request to OpenAI API timed out. Please try again."
+            )
+        except APIConnectionError:
+            raise HTTPException(
+                status_code=503,
+                detail="Unable to connect to OpenAI API. Please check your connection and try again."
+            )
+        except APIError as e:
+            error_message = str(e)
+            if "insufficient_quota" in error_message.lower():
+                raise HTTPException(
+                    status_code=402,
+                    detail="OpenAI API quota exceeded. Please check your API key billing."
+                )
+            elif "invalid_api_key" in error_message.lower():
+                raise HTTPException(
+                    status_code=401,
+                    detail="Invalid OpenAI API key. Please check your configuration."
+                )
+            else:
+                raise HTTPException(
+                    status_code=500,
+                    detail=f"OpenAI API error: {error_message}"
+                )
         except Exception as e:
             raise HTTPException(
                 status_code=500,
-                detail=f"OpenAI API error: {str(e)}"
+                detail=f"Unexpected error calling OpenAI API: {str(e)}"
             )
         
         # Extract response content
@@ -151,8 +186,8 @@ async def convert_resume(request: ConvertResumeRequest):
         
         return {
             "success": True,
-            "standard": request.standard,
-            "standard_name": RESUME_STANDARDS.get(request.standard, request.standard),
+            "standard": body.standard,
+            "standard_name": RESUME_STANDARDS.get(body.standard, body.standard),
             "resume": structured_resume
         }
     
