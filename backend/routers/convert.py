@@ -64,7 +64,7 @@ def parse_json_response(response_text: str) -> dict:
 
 @router.post("/convert-resume")
 @limiter.limit(RATE_LIMITS["convert"])
-async def convert_resume(http_request: Request, body: ConvertResumeRequest):
+async def convert_resume(request: Request, body: ConvertResumeRequest):
     """
     Convert parsed resume text into a structured resume based on selected standard.
     

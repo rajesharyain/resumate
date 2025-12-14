@@ -4,14 +4,21 @@ Resume download router - PDF and DOCX generation
 from fastapi import APIRouter, HTTPException, Body
 from fastapi.responses import Response, StreamingResponse
 from pydantic import BaseModel
-from typing import Dict, Any, List
+from typing import Dict, Any, List, Optional
 import io
 import html
-from weasyprint import HTML, CSS
+
+# Try to import weasyprint, but make it optional for Windows compatibility
+try:
+    from weasyprint import HTML, CSS
+    WEASYPRINT_AVAILABLE = True
+except (ImportError, OSError) as e:
+    WEASYPRINT_AVAILABLE = False
+    WEASYPRINT_ERROR = str(e)
+
 from docx import Document
 from docx.shared import Inches, Pt
 from docx.enum.text import WD_ALIGN_PARAGRAPH
-from jinja2 import Template
 # StructuredResume type is defined in convert.py but we use Dict here for flexibility
 
 router = APIRouter(prefix="/api", tags=["download"])
@@ -814,6 +821,13 @@ async def download_pdf(request: DownloadRequest):
     
     Accepts structured resume data and returns PDF file.
     """
+    # Check if WeasyPrint is available
+    if not WEASYPRINT_AVAILABLE:
+        raise HTTPException(
+            status_code=503,
+            detail=f"PDF generation is not available on this system. WeasyPrint requires system libraries that are not installed. Error: {WEASYPRINT_ERROR if 'WEASYPRINT_ERROR' in globals() else 'WeasyPrint not available'}. Please use DOCX download instead or install WeasyPrint dependencies."
+        )
+    
     try:
         # Validate input
         if not request.resume:
